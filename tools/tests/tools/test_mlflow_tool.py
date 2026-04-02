@@ -193,32 +193,27 @@ class TestMlflowGetMetrics:
     """Test mlflow_get_metrics tool."""
 
     def test_get_metrics_successful(self, tool_fns):
-        """Test retrieving metrics for a run."""
-        metrics = {
-            "metrics": [
-                {
-                    "key": "accuracy",
-                    "value": 0.95,
-                    "timestamp": 1234567890000,
-                    "step": 0,
+        """Test retrieving all metrics for a run via /mlflow/runs/get."""
+        run_response = {
+            "run": {
+                "info": {"run_id": "run-123"},
+                "data": {
+                    "metrics": {"accuracy": 0.95, "loss": 0.05},
+                    "params": {},
+                    "tags": {},
                 },
-                {
-                    "key": "loss",
-                    "value": 0.05,
-                    "timestamp": 1234567891000,
-                    "step": 0,
-                },
-            ]
+            }
         }
         with patch.dict("os.environ", ENV):
             with patch(
                 "aden_tools.tools.mlflow_tool.mlflow_tool.httpx.get",
-                return_value=_mock_resp(metrics),
+                return_value=_mock_resp(run_response),
             ):
                 result = tool_fns["mlflow_get_metrics"](run_id="run-123")
 
         assert "metrics" in result
-        assert len(result["metrics"]) == 2
+        assert result["metrics"]["accuracy"] == 0.95
+        assert result["metrics"]["loss"] == 0.05
 
 
 class TestMlflowSearchRuns:
@@ -353,7 +348,7 @@ class TestMlflowTransitionModelStage:
             ):
                 result = tool_fns["mlflow_transition_model_stage"](
                     name="my-model",
-                    version=1,
+                    version="1",
                     stage="Production",
                 )
 
@@ -363,7 +358,7 @@ class TestMlflowTransitionModelStage:
         """Test with invalid stage."""
         result = tool_fns["mlflow_transition_model_stage"](
             name="my-model",
-            version=1,
+            version="1",
             stage="InvalidStage",
         )
         assert "error" in result

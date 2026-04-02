@@ -14,6 +14,7 @@ API Reference: https://mlflow.org/docs/latest/rest-api.html
 from __future__ import annotations
 
 import os
+import time
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -65,8 +66,6 @@ def _make_request(
             resp = httpx.get(url, headers=headers, params=params, timeout=30.0)
         elif method.upper() == "POST":
             resp = httpx.post(url, headers=headers, json=json_data, params=params, timeout=30.0)
-        elif method.upper() == "PATCH":
-            resp = httpx.patch(url, headers=headers, json=json_data, timeout=30.0)
         else:
             return {"error": f"Unsupported HTTP method: {method}"}
 
@@ -82,7 +81,10 @@ def _make_request(
                 message = resp.text
             return {"error": f"MLflow API error (HTTP {resp.status_code}): {message}"}
 
-        return resp.json() if resp.text else {"success": True}
+        try:
+            return resp.json() if resp.text else {"success": True}
+        except Exception:
+            return {"success": True}
     except httpx.ConnectError:
         return {
             "error": f"Cannot connect to MLflow server at {uri}. Is it running?",
@@ -233,7 +235,7 @@ def register_tools(
                         "run_id": run_id,
                         "key": metric_name,
                         "value": float(metric_value),
-                        "timestamp": int(__import__("time").time() * 1000),
+                        "timestamp": int(time.time() * 1000),
                     },
                 )
                 if "error" not in resp:
@@ -283,13 +285,18 @@ def register_tools(
         Returns:
             Dict with metrics data.
         """
-        return _make_request(
+        # /mlflow/runs/get returns all current metric values without requiring a key,
+        # unlike /mlflow/metrics/get-history which requires both run_id and metric_key.
+        resp = _make_request(
             "GET",
             tracking_uri,
-            "/mlflow/metrics/get-history",
+            "/mlflow/runs/get",
             token=token,
             params={"run_id": run_id},
         )
+        if "error" in resp:
+            return resp
+        return {"metrics": resp.get("run", {}).get("data", {}).get("metrics", {})}
 
     @mcp.tool()
     def mlflow_search_runs(
@@ -311,7 +318,7 @@ def register_tools(
         payload: dict[str, Any] = {"max_results": max_results}
 
         if experiment_ids:
-            payload["experiment_ids"] = experiment_ids.split(",")
+            payload["experiment_ids"] = [e.strip() for e in experiment_ids.split(",") if e.strip()]
         if filter_string:
             payload["filter"] = filter_string
 
@@ -345,7 +352,8 @@ def register_tools(
             "name": name,
         }
         if tags:
-            payload["tags"] = tags
+            # MLflow model-versions/create expects tags as [{key, value}] objects
+            payload["tags"] = [{"key": k, "value": v} for k, v in tags.items()]
 
         return _make_request(
             "POST",
@@ -396,7 +404,7 @@ def register_tools(
     @mcp.tool()
     def mlflow_transition_model_stage(
         name: str,
-        version: int,
+        version: str,
         stage: str,
     ) -> dict:
         """
@@ -404,16 +412,15 @@ def register_tools(
 
         Args:
             name: Registered model name.
-            version: Model version number.
+            version: Model version (e.g., "1").
             stage: Target stage (Staging, Production, or Archived).
 
         Returns:
             Dict with transition status.
         """
-        if stage not in ["Staging", "Production", "Archived", "None"]:
-            return {
-                "error": f"Invalid stage '{stage}'. Must be one of: Staging, Production, Archived, None"
-            }
+        valid_stages = ["Staging", "Production", "Archived", "None"]
+        if stage not in valid_stages:
+            return {"error": f"Invalid stage '{stage}'. Must be one of: {', '.join(valid_stages)}"}
 
         return _make_request(
             "POST",
